@@ -1,198 +1,282 @@
 /**
- * 悟空 vs 賽魯 — 簡單 2D 格鬥（p5.js）
- * 左：孫悟空（橙/黃）  右：賽魯（綠/黑）
+ * 悟空 vs 賽魯 — 像素風 1P vs CPU（p5.js）
+ * 操作：WASD 移動／跳、J 輕擊、K 技能、L 迴避
  */
 
-const W = 800;
-const H = 600;
-const GROUND_Y = 520;
-const GRAVITY = 0.7;
-const JUMP_FORCE = -14;
-const MOVE_SPEED = 5;
+const GW = 320;   // 內部像素解析度
+const GH = 180;
+const SCALE = 3;  // 顯示放大（960x540）
+const GROUND = 150;
+const GRAVITY = 0.45;
+const JUMP_V = -6.2;
+const MOVE_SPD = 1.6;
+const DASH_SPD = 4.2;
 
 let goku, cell;
 let projectiles = [];
 let particles = [];
+let hitsparks = [];
 let gameOver = false;
 let winner = null;
 let keys = {};
+let shake = 0;
+let roundMsg = "";
+let roundTimer = 0;
 
 function setup() {
-  createCanvas(W, H);
-  textFont("Segoe UI, Noto Sans TC, sans-serif");
+  const c = createCanvas(GW * SCALE, GH * SCALE);
+  c.elt.style.imageRendering = "pixelated";
+  noSmooth();
+  pixelDensity(1);
+  textFont("monospace");
   resetGame();
 }
 
 function resetGame() {
-  goku = new Fighter({
-    name: "孫悟空",
-    x: 160,
-    facing: 1,
-    bodyColor: color(255, 140, 40),
-    accentColor: color(255, 220, 80),
-    hairColor: color(30, 20, 10),
-    isGoku: true,
-  });
-  cell = new Fighter({
-    name: "賽魯",
-    x: 640,
-    facing: -1,
-    bodyColor: color(40, 180, 70),
-    accentColor: color(20, 40, 20),
-    hairColor: color(10, 80, 30),
-    isGoku: false,
-  });
+  goku = new Fighter(70, true);
+  cell = new Fighter(250, false);
   projectiles = [];
   particles = [];
+  hitsparks = [];
   gameOver = false;
   winner = null;
+  roundMsg = "FIGHT!";
+  roundTimer = 60;
+  shake = 0;
 }
 
 function draw() {
-  drawBackground();
+  // 畫到低解析度邏輯，再用 nearest-neighbor 放大
+  push();
+  if (shake > 0) {
+    translate(random(-shake, shake) * SCALE, random(-shake, shake) * SCALE);
+    shake *= 0.85;
+    if (shake < 0.3) shake = 0;
+  }
+  scale(SCALE);
+  noSmooth();
+
+  drawBG();
   drawGround();
 
   if (!gameOver) {
-    handleInput();
+    if (roundTimer <= 0) {
+      handlePlayerInput();
+      updateAI(cell, goku);
+    }
     updateFighters();
     updateProjectiles();
-    checkMeleeHits();
+    updateParticles();
+  } else {
+    updateParticles();
   }
 
-  updateParticles();
-
-  goku.display();
-  cell.display();
-  for (let p of projectiles) p.display();
-  for (let pt of particles) pt.display();
+  // 實體
+  for (let p of projectiles) p.draw();
+  goku.draw();
+  cell.draw();
+  for (let h of hitsparks) h.draw();
+  for (let p of particles) p.draw();
 
   drawHUD();
 
+  if (roundTimer > 0) {
+    roundTimer--;
+    fill(255);
+    textAlign(CENTER, CENTER);
+    textSize(16);
+    text(roundMsg, GW / 2, GH / 2 - 20);
+  }
+
   if (gameOver) drawVictory();
+  pop();
 }
 
-/* ---------- 背景與地面 ---------- */
+/* ========== 背景 ========== */
 
-function drawBackground() {
-  // 天空漸層
-  for (let y = 0; y < H; y++) {
-    let t = y / H;
-    stroke(lerp(25, 80, t), lerp(40, 120, t), lerp(90, 180, t));
-    line(0, y, W, y);
-  }
-  // 遠景山
+function drawBG() {
+  // 像素天空
   noStroke();
-  fill(30, 55, 90, 180);
-  triangle(0, GROUND_Y, 180, 280, 360, GROUND_Y);
-  triangle(280, GROUND_Y, 500, 220, 720, GROUND_Y);
-  fill(20, 40, 70, 160);
-  triangle(100, GROUND_Y, 350, 320, 600, GROUND_Y);
+  for (let y = 0; y < GROUND; y++) {
+    let t = y / GROUND;
+    fill(lerp(18, 70, t), lerp(28, 100, t), lerp(70, 160, t));
+    rect(0, y, GW, 1);
+  }
+  // 遠山（方塊）
+  fill(25, 45, 80);
+  rect(0, 90, 80, GROUND - 90);
+  rect(60, 70, 50, GROUND - 70);
+  rect(140, 85, 70, GROUND - 85);
+  rect(220, 60, 60, GROUND - 60);
+  rect(270, 95, 50, GROUND - 95);
+  fill(15, 30, 55);
+  rect(40, 100, 40, GROUND - 100);
+  rect(180, 100, 55, GROUND - 100);
 }
 
 function drawGround() {
   noStroke();
-  fill(45, 55, 40);
-  rect(0, GROUND_Y, W, H - GROUND_Y);
-  fill(70, 90, 50);
-  rect(0, GROUND_Y, W, 12);
-  // 地面紋理
-  stroke(55, 70, 40);
-  for (let x = 0; x < W; x += 40) {
-    line(x, GROUND_Y + 20, x + 20, GROUND_Y + 35);
+  fill(40, 55, 35);
+  rect(0, GROUND, GW, GH - GROUND);
+  fill(70, 95, 45);
+  rect(0, GROUND, GW, 4);
+  fill(55, 75, 40);
+  for (let x = 0; x < GW; x += 8) {
+    rect(x, GROUND + 6, 4, 2);
   }
 }
 
-/* ---------- 輸入 ---------- */
+/* ========== 輸入 ========== */
 
-function handleInput() {
-  // 悟空：A/D 移動、W 跳、S 普攻、Q 技能
-  if (keys["a"] || keys["A"]) goku.move(-1);
-  if (keys["d"] || keys["D"]) goku.move(1);
-  if (keys["w"] || keys["W"]) goku.jump();
-  if (keys["s"] || keys["S"]) goku.attack();
-  if (keys["q"] || keys["Q"]) goku.special();
+function handlePlayerInput() {
+  const p = goku;
+  if (p.stun > 0 || p.dead) return;
 
-  // 賽魯：方向鍵移動/跳/普攻、/ 技能
-  if (keys["ArrowLeft"]) cell.move(-1);
-  if (keys["ArrowRight"]) cell.move(1);
-  if (keys["ArrowUp"]) cell.jump();
-  if (keys["ArrowDown"]) cell.attack();
-  if (keys["/"] || keys["Slash"]) cell.special();
+  if (!p.attacking && p.dodgeTimer <= 0) {
+    if (keys["a"] || keys["A"]) p.move(-1);
+    if (keys["d"] || keys["D"]) p.move(1);
+    if (keys["w"] || keys["W"]) p.jump();
+    if (keys["s"] || keys["S"]) p.crouching = true;
+    else p.crouching = false;
+  }
+
+  if (keys["j"] || keys["J"]) p.lightAttack();
+  if (keys["k"] || keys["K"]) p.skill();
+  if (keys["l"] || keys["L"]) p.dodge();
 }
 
 function keyPressed() {
   keys[key] = true;
-  keys[keyCode] = true;
-  // 方向鍵用 keyCode 更穩
   if (keyCode === LEFT_ARROW) keys["ArrowLeft"] = true;
   if (keyCode === RIGHT_ARROW) keys["ArrowRight"] = true;
   if (keyCode === UP_ARROW) keys["ArrowUp"] = true;
   if (keyCode === DOWN_ARROW) keys["ArrowDown"] = true;
 
-  if (gameOver && (key === "r" || key === "R")) {
-    resetGame();
-  }
-  // 防止方向鍵捲動頁面
+  if (gameOver && (key === "r" || key === "R")) resetGame();
   if ([37, 38, 39, 40].includes(keyCode)) return false;
 }
 
 function keyReleased() {
   keys[key] = false;
-  keys[keyCode] = false;
   if (keyCode === LEFT_ARROW) keys["ArrowLeft"] = false;
   if (keyCode === RIGHT_ARROW) keys["ArrowRight"] = false;
   if (keyCode === UP_ARROW) keys["ArrowUp"] = false;
   if (keyCode === DOWN_ARROW) keys["ArrowDown"] = false;
 }
 
-/* ---------- 更新 ---------- */
+/* ========== AI ========== */
+
+function updateAI(bot, target) {
+  if (bot.stun > 0 || bot.dead || bot.dodgeTimer > 0) return;
+
+  const dx = target.x - bot.x;
+  const dist = abs(dx);
+  const dir = dx > 0 ? 1 : -1;
+
+  bot.thinkTimer--;
+  if (bot.thinkTimer <= 0) {
+    bot.thinkTimer = floor(random(12, 28));
+    bot.aiAction = chooseAIAction(bot, target, dist);
+  }
+
+  switch (bot.aiAction) {
+    case "approach":
+      if (!bot.attacking) bot.move(dir);
+      if (dist < 28 && random() < 0.4) bot.aiAction = "attack";
+      break;
+    case "retreat":
+      if (!bot.attacking) bot.move(-dir);
+      if (random() < 0.08) bot.jump();
+      break;
+    case "attack":
+      if (dist < 32) bot.lightAttack();
+      else bot.aiAction = "approach";
+      break;
+    case "skill":
+      bot.skill();
+      bot.aiAction = "retreat";
+      break;
+    case "dodge":
+      bot.dodge();
+      bot.aiAction = "approach";
+      break;
+    case "jump":
+      bot.jump();
+      bot.aiAction = "approach";
+      break;
+  }
+
+  // 對玩家彈幕反應
+  for (let p of projectiles) {
+    if (p.owner === bot) continue;
+    if (abs(p.x - bot.x) < 40 && abs(p.y - (bot.y - 12)) < 16) {
+      if (random() < 0.55) {
+        bot.dodge();
+        break;
+      }
+    }
+  }
+}
+
+function chooseAIAction(bot, target, dist) {
+  // 玩家喺攻擊／放技能時偏向迴避
+  if (target.attacking && dist < 50 && random() < 0.45) return "dodge";
+  if (bot.skillCd <= 0 && dist > 40 && dist < 140 && random() < 0.35) return "skill";
+  if (dist > 50) return random() < 0.75 ? "approach" : "jump";
+  if (dist < 22) return random() < 0.55 ? "attack" : random() < 0.5 ? "dodge" : "retreat";
+  return random(["approach", "attack", "retreat", "jump"]);
+}
+
+/* ========== 更新 ========== */
 
 function updateFighters() {
   goku.update();
   cell.update();
-  // 互不穿透（簡單推開）
-  let gap = abs(goku.x - cell.x);
-  if (gap < 50 && abs(goku.y - cell.y) < 70) {
-    let mid = (goku.x + cell.x) / 2;
-    if (goku.x < cell.x) {
-      goku.x = mid - 25;
-      cell.x = mid + 25;
+
+  // 分開重疊
+  if (abs(goku.x - cell.x) < 14 && abs(goku.y - cell.y) < 20) {
+    const mid = (goku.x + cell.x) / 2;
+    if (goku.x <= cell.x) {
+      goku.x = mid - 7;
+      cell.x = mid + 7;
     } else {
-      cell.x = mid - 25;
-      goku.x = mid + 25;
+      cell.x = mid - 7;
+      goku.x = mid + 7;
     }
   }
-  // 面向對方
-  if (!goku.attacking) goku.facing = goku.x < cell.x ? 1 : -1;
-  if (!cell.attacking) cell.facing = cell.x < goku.x ? 1 : -1;
+
+  if (!goku.attacking && goku.dodgeTimer <= 0)
+    goku.facing = goku.x < cell.x ? 1 : -1;
+  if (!cell.attacking && cell.dodgeTimer <= 0)
+    cell.facing = cell.x < goku.x ? 1 : -1;
+
+  // 近戰判定
+  for (let atk of [goku, cell]) {
+    if (!atk.attacking || atk.hitLanded || atk.attackKind !== "light") continue;
+    if (atk.attackTimer > 8 || atk.attackTimer < 3) continue;
+    const tgt = atk === goku ? cell : goku;
+    if (atk.meleeHit(tgt)) {
+      tgt.hurt(6, atk.facing);
+      atk.hitLanded = true;
+      spawnSpark(atk.x + atk.facing * 14, atk.y - 12, atk.isPlayer);
+      shake = 2;
+    }
+  }
 }
 
 function updateProjectiles() {
   for (let i = projectiles.length - 1; i >= 0; i--) {
-    let p = projectiles[i];
+    const p = projectiles[i];
     p.update();
-    // 命中對方
-    let target = p.owner === goku ? cell : goku;
-    if (p.hits(target)) {
-      target.takeDamage(p.damage);
-      spawnHitParticles(p.x, p.y, p.col);
+    const tgt = p.owner === goku ? cell : goku;
+    if (p.hits(tgt)) {
+      tgt.hurt(p.dmg, Math.sign(p.vx) || p.owner.facing);
+      spawnSpark(p.x, p.y, p.owner.isPlayer);
+      shake = 3;
       projectiles.splice(i, 1);
       continue;
     }
-    if (p.offscreen()) projectiles.splice(i, 1);
-  }
-}
-
-function checkMeleeHits() {
-  for (let attacker of [goku, cell]) {
-    if (!attacker.attacking || attacker.hitLanded) continue;
-    let target = attacker === goku ? cell : goku;
-    if (attacker.meleeHits(target)) {
-      target.takeDamage(8);
-      attacker.hitLanded = true;
-      let hx = attacker.x + attacker.facing * 40;
-      spawnHitParticles(hx, attacker.y - 30, attacker.accentColor);
-    }
+    if (p.dead) projectiles.splice(i, 1);
   }
 }
 
@@ -201,245 +285,290 @@ function updateParticles() {
     particles[i].update();
     if (particles[i].life <= 0) particles.splice(i, 1);
   }
-}
-
-function spawnHitParticles(x, y, col) {
-  for (let i = 0; i < 10; i++) {
-    particles.push(new Particle(x, y, col));
+  for (let i = hitsparks.length - 1; i >= 0; i--) {
+    hitsparks[i].update();
+    if (hitsparks[i].life <= 0) hitsparks.splice(i, 1);
   }
 }
 
-/* ---------- HUD ---------- */
-
-function drawHUD() {
-  // 悟空血條（左）
-  drawHealthBar(30, 24, 300, 22, goku.hp / goku.maxHp, color(255, 160, 40), "孫悟空");
-  // 賽魯血條（右）
-  drawHealthBar(W - 330, 24, 300, 22, cell.hp / cell.maxHp, color(50, 200, 80), "賽魯");
-
-  // VS
-  fill(255, 230);
-  textAlign(CENTER, CENTER);
-  textSize(22);
-  textStyle(BOLD);
-  text("VS", W / 2, 36);
-
-  // 操作提示
-  fill(255, 160);
-  textSize(11);
-  textStyle(NORMAL);
-  textAlign(LEFT);
-  text("悟空: A/D 移動  W 跳  S 普攻  Q 氣功波", 30, H - 18);
-  textAlign(RIGHT);
-  text("賽魯: ←/→ 移動  ↑ 跳  ↓ 普攻  / 死亡光線", W - 30, H - 18);
+function spawnSpark(x, y, isPlayer) {
+  hitsparks.push(new HitSpark(x, y));
+  const c = isPlayer ? color(255, 200, 60) : color(100, 255, 120);
+  for (let i = 0; i < 6; i++) particles.push(new Particle(x, y, c));
 }
 
-function drawHealthBar(x, y, w, h, ratio, col, label) {
+/* ========== HUD ========== */
+
+function drawHUD() {
+  // 血條底板
+  drawBar(8, 6, 120, 8, goku.hp / goku.maxHp, color(255, 150, 40), "GOKU");
+  drawBar(GW - 128, 6, 120, 8, cell.hp / cell.maxHp, color(60, 220, 90), "CELL");
+
+  fill(255);
+  textAlign(CENTER, TOP);
+  textSize(8);
+  text("VS", GW / 2, 6);
+  textSize(5);
+  fill(220);
+  textAlign(LEFT, BOTTOM);
+  text("WASD MOVE  J HIT  K SKILL  L DODGE", 6, GH - 3);
+  textAlign(RIGHT, BOTTOM);
+  text("1P vs CPU", GW - 6, GH - 3);
+}
+
+function drawBar(x, y, w, h, ratio, col, label) {
   ratio = constrain(ratio, 0, 1);
   noStroke();
-  fill(30, 30, 40, 200);
-  rect(x - 2, y - 2, w + 4, h + 4, 4);
-  fill(60, 60, 70);
-  rect(x, y, w, h, 3);
+  fill(20);
+  rect(x - 1, y - 1, w + 2, h + 2);
+  fill(50);
+  rect(x, y, w, h);
   fill(col);
-  rect(x, y, w * ratio, h, 3);
-  // 高光
-  fill(255, 80);
-  rect(x, y, w * ratio, h * 0.35, 3);
+  rect(x, y, floor(w * ratio), h);
   fill(255);
-  textSize(13);
-  textStyle(BOLD);
+  textSize(5);
   textAlign(LEFT, BOTTOM);
-  text(label, x, y - 4);
-  textAlign(RIGHT, BOTTOM);
-  text(ceil(ratio * 100) + "%", x + w, y - 4);
+  text(label, x, y - 1);
 }
 
 function drawVictory() {
   fill(0, 160);
-  rect(0, 0, W, H);
+  rect(0, 0, GW, GH);
   fill(255);
   textAlign(CENTER, CENTER);
-  textSize(48);
-  textStyle(BOLD);
-  text(winner + " 勝利！", W / 2, H / 2 - 20);
-  textSize(18);
-  textStyle(NORMAL);
-  fill(255, 200);
-  text("按 R 重新開始", W / 2, H / 2 + 40);
+  textSize(14);
+  text(winner + " WINS!", GW / 2, GH / 2 - 8);
+  textSize(7);
+  fill(200);
+  text("PRESS R TO RESTART", GW / 2, GH / 2 + 10);
 }
 
 /* ========== Fighter ========== */
 
 class Fighter {
-  constructor(opts) {
-    this.name = opts.name;
-    this.x = opts.x;
-    this.y = GROUND_Y;
+  constructor(x, isPlayer) {
+    this.x = x;
+    this.y = GROUND;
     this.vy = 0;
-    this.w = 40;
-    this.h = 70;
-    this.facing = opts.facing;
-    this.bodyColor = opts.bodyColor;
-    this.accentColor = opts.accentColor;
-    this.hairColor = opts.hairColor;
-    this.isGoku = opts.isGoku;
+    this.facing = isPlayer ? 1 : -1;
+    this.isPlayer = isPlayer;
     this.maxHp = 100;
     this.hp = 100;
     this.onGround = true;
+    this.crouching = false;
     this.attacking = false;
     this.attackTimer = 0;
-    this.specialCooldown = 0;
+    this.attackKind = null;
     this.hitLanded = false;
-    this.hurtFlash = 0;
+    this.skillCd = 0;
+    this.dodgeCd = 0;
+    this.dodgeTimer = 0;
+    this.stun = 0;
+    this.flash = 0;
     this.invuln = 0;
+    this.dead = false;
+    // AI
+    this.thinkTimer = 20;
+    this.aiAction = "approach";
   }
 
   move(dir) {
-    if (this.attacking) return;
-    this.x += dir * MOVE_SPEED;
-    this.x = constrain(this.x, 30, W - 30);
+    if (this.attacking || this.dodgeTimer > 0 || this.stun > 0) return;
+    this.x += dir * MOVE_SPD;
+    this.x = constrain(this.x, 12, GW - 12);
   }
 
   jump() {
-    if (this.onGround && !this.attacking) {
-      this.vy = JUMP_FORCE;
+    if (this.onGround && !this.attacking && this.stun <= 0 && this.dodgeTimer <= 0) {
+      this.vy = JUMP_V;
       this.onGround = false;
+      this.crouching = false;
     }
   }
 
-  attack() {
-    if (this.attacking || this.attackTimer > 0) return;
+  lightAttack() {
+    if (this.attacking || this.stun > 0 || this.dodgeTimer > 0) return;
     this.attacking = true;
-    this.attackTimer = 18;
+    this.attackTimer = 14;
+    this.attackKind = "light";
     this.hitLanded = false;
   }
 
-  special() {
-    if (this.specialCooldown > 0 || this.attacking) return;
-    this.specialCooldown = 90;
+  skill() {
+    if (this.skillCd > 0 || this.attacking || this.stun > 0 || this.dodgeTimer > 0) return;
+    this.skillCd = 70;
     this.attacking = true;
-    this.attackTimer = 20;
-    this.hitLanded = true; // 遠程唔用近戰判定
+    this.attackTimer = 18;
+    this.attackKind = "skill";
+    this.hitLanded = true;
 
-    let px = this.x + this.facing * 45;
-    let py = this.y - 35;
-    if (this.isGoku) {
-      // 氣功波：黃色能量球
-      projectiles.push(
-        new Projectile(px, py, this.facing * 9, 0, 18, color(255, 230, 60), 16, this)
-      );
-      spawnHitParticles(px, py, color(255, 220, 80));
+    const px = this.x + this.facing * 16;
+    const py = this.y - 14;
+    if (this.isPlayer) {
+      // 氣功波
+      projectiles.push(new Projectile(px, py, this.facing * 3.2, 0, 5, color(255, 230, 60), 12, this, false));
+      for (let i = 0; i < 4; i++) particles.push(new Particle(px, py, color(255, 220, 80)));
     } else {
-      // 死亡光線：細長綠色光束彈
-      projectiles.push(
-        new Projectile(px, py, this.facing * 14, 0, 12, color(120, 255, 100), 14, this, true)
-      );
-      spawnHitParticles(px, py, color(100, 255, 120));
+      // 死亡光線
+      projectiles.push(new Projectile(px, py, this.facing * 4.5, 0, 3, color(120, 255, 100), 11, this, true));
+      for (let i = 0; i < 4; i++) particles.push(new Particle(px, py, color(100, 255, 120)));
     }
   }
 
+  dodge() {
+    if (this.dodgeCd > 0 || this.stun > 0 || this.dodgeTimer > 0) return;
+    this.dodgeCd = 40;
+    this.dodgeTimer = 12;
+    this.invuln = 12;
+    this.attacking = false;
+    this.attackTimer = 0;
+    this.x += this.facing * DASH_SPD * 3;
+    this.x = constrain(this.x, 12, GW - 12);
+    for (let i = 0; i < 5; i++) {
+      particles.push(new Particle(this.x - this.facing * i * 3, this.y - 10, color(200, 220, 255)));
+    }
+  }
+
+  hurt(dmg, knockDir) {
+    if (this.invuln > 0 || this.dead) return;
+    this.hp = max(0, this.hp - dmg);
+    this.flash = 8;
+    this.stun = 10;
+    this.invuln = 10;
+    this.attacking = false;
+    this.attackTimer = 0;
+    this.x += knockDir * 5;
+    this.x = constrain(this.x, 12, GW - 12);
+    this.vy = -1.5;
+    this.onGround = false;
+
+    if (this.hp <= 0) {
+      this.dead = true;
+      this.hp = 0;
+      gameOver = true;
+      winner = this.isPlayer ? "CELL" : "GOKU";
+    }
+  }
+
+  meleeHit(other) {
+    if (other.invuln > 0 || other.dodgeTimer > 0) return false;
+    const hx = this.x + this.facing * 14;
+    const hy = this.y - (this.crouching ? 8 : 12);
+    return abs(hx - other.x) < 16 && abs(hy - (other.y - 12)) < 16;
+  }
+
   update() {
-    // 重力
+    if (this.dead) return;
+
     this.vy += GRAVITY;
     this.y += this.vy;
-    if (this.y >= GROUND_Y) {
-      this.y = GROUND_Y;
+    if (this.y >= GROUND) {
+      this.y = GROUND;
       this.vy = 0;
       this.onGround = true;
     }
 
     if (this.attackTimer > 0) {
       this.attackTimer--;
-      if (this.attackTimer === 0) this.attacking = false;
+      if (this.attackTimer === 0) {
+        this.attacking = false;
+        this.attackKind = null;
+      }
     }
-    if (this.specialCooldown > 0) this.specialCooldown--;
-    if (this.hurtFlash > 0) this.hurtFlash--;
+    if (this.skillCd > 0) this.skillCd--;
+    if (this.dodgeCd > 0) this.dodgeCd--;
+    if (this.dodgeTimer > 0) this.dodgeTimer--;
+    if (this.stun > 0) this.stun--;
+    if (this.flash > 0) this.flash--;
     if (this.invuln > 0) this.invuln--;
   }
 
-  takeDamage(amount) {
-    if (this.invuln > 0 || this.hp <= 0) return;
-    this.hp = max(0, this.hp - amount);
-    this.hurtFlash = 10;
-    this.invuln = 12;
-    // 擊退：遠離對手
-    let other = this === goku ? cell : goku;
-    let dir = this.x < other.x ? -1 : 1;
-    this.x += dir * 12;
-    this.x = constrain(this.x, 30, W - 30);
-
-    if (this.hp <= 0) {
-      gameOver = true;
-      winner = this === goku ? cell.name : goku.name;
+  draw() {
+    if (this.dead) return;
+    // 迴避時半透明閃爍
+    if (this.dodgeTimer > 0 && frameCount % 2 === 0) return;
+    if (this.flash > 0 && frameCount % 2 === 0) {
+      // 受傷閃白下面會處理
     }
-  }
 
-  meleeHits(other) {
-    let reachX = this.x + this.facing * 45;
-    let reachY = this.y - 35;
-    return dist(reachX, reachY, other.x, other.y - 35) < 50;
-  }
-
-  display() {
     push();
-    translate(this.x, this.y);
+    translate(floor(this.x), floor(this.y));
     scale(this.facing, 1);
 
-    let flash = this.hurtFlash > 0 && frameCount % 4 < 2;
-    let body = flash ? color(255) : this.bodyColor;
-    let accent = flash ? color(255) : this.accentColor;
+    const flash = this.flash > 0 && frameCount % 2 === 0;
+    const body = flash
+      ? color(255)
+      : this.isPlayer
+      ? color(240, 140, 40)
+      : color(40, 170, 70);
+    const accent = flash
+      ? color(255)
+      : this.isPlayer
+      ? color(255, 220, 70)
+      : color(15, 40, 15);
+    const skin = flash ? color(255) : color(255, 205, 160);
+    const hair = this.isPlayer ? color(20, 15, 10) : color(10, 70, 25);
+
+    const crouch = this.crouching && this.onGround && !this.attacking ? 4 : 0;
 
     // 影子
     noStroke();
-    fill(0, 60);
-    ellipse(0, 4, 50, 10);
+    fill(0, 80);
+    rect(-8, 0, 16, 3);
 
     // 腿
     fill(body);
-    rect(-14, -28, 12, 28, 3);
-    rect(2, -28, 12, 28, 3);
+    if (crouch) {
+      rect(-6, -8, 5, 8);
+      rect(1, -8, 5, 8);
+    } else {
+      rect(-6, -14, 5, 14);
+      rect(1, -14, 5, 14);
+    }
 
     // 身體
     fill(body);
-    rect(-18, -62, 36, 36, 6);
-    // 腰帶／細節
+    rect(-7, -28 + crouch, 14, 16);
     fill(accent);
-    rect(-18, -32, 36, 6);
+    rect(-7, -14 + crouch, 14, 3);
 
     // 頭
-    fill(255, 210, 170);
-    ellipse(0, -78, 28, 28);
+    fill(skin);
+    rect(-6, -38 + crouch, 12, 11);
 
-    // 頭髮／頭部特徵（簡化抽象形狀，避免版權角色肖像）
-    fill(this.hairColor);
-    if (this.isGoku) {
-      // 尖刺髮型（抽象）
-      triangle(-14, -82, -6, -105, 2, -82);
-      triangle(-4, -85, 6, -110, 12, -82);
-      triangle(4, -82, 14, -100, 16, -78);
+    // 頭髮／頭殼（像素塊）
+    fill(hair);
+    if (this.isPlayer) {
+      rect(-7, -42 + crouch, 4, 6);
+      rect(-3, -46 + crouch, 4, 8);
+      rect(1, -44 + crouch, 4, 7);
+      rect(5, -40 + crouch, 3, 5);
     } else {
-      // 賽魯式頭殼（抽象橢圓＋斑點）
-      ellipse(0, -88, 32, 26);
+      rect(-7, -44 + crouch, 14, 8);
       fill(accent);
-      ellipse(-6, -90, 8, 6);
-      ellipse(6, -86, 6, 5);
+      rect(-5, -42 + crouch, 3, 3);
+      rect(2, -41 + crouch, 3, 2);
     }
 
-    // 眼睛
+    // 眼
     fill(20);
-    ellipse(6, -78, 4, 5);
+    rect(2, -34 + crouch, 2, 2);
 
-    // 手臂：攻擊時前伸＋光暈
-    if (this.attacking && this.attackTimer > 6) {
+    // 手臂／攻擊
+    if (this.attacking && this.attackKind === "light" && this.attackTimer <= 10) {
       fill(accent);
-      ellipse(28, -40, 22, 14);
-      fill(red(accent), green(accent), blue(accent), 100);
-      ellipse(36, -40, 30, 24);
+      rect(8, -24 + crouch, 12, 5);
+      fill(255, 255, 200, 150);
+      rect(18, -25 + crouch, 4, 7);
+    } else if (this.attacking && this.attackKind === "skill") {
+      fill(accent);
+      rect(6, -26 + crouch, 10, 6);
+      fill(this.isPlayer ? color(255, 240, 100, 180) : color(150, 255, 150, 180));
+      rect(14, -28 + crouch, 8, 10);
     } else {
       fill(body);
-      ellipse(20, -45, 14, 12);
-      ellipse(-16, -42, 12, 14);
+      rect(5, -24 + crouch, 5, 5);
+      rect(-9, -22 + crouch, 4, 6);
     }
 
     pop();
@@ -449,84 +578,96 @@ class Fighter {
 /* ========== Projectile ========== */
 
 class Projectile {
-  constructor(x, y, vx, vy, r, col, damage, owner, isBeam = false) {
+  constructor(x, y, vx, vy, r, col, dmg, owner, beam) {
     this.x = x;
     this.y = y;
     this.vx = vx;
     this.vy = vy;
     this.r = r;
     this.col = col;
-    this.damage = damage;
+    this.dmg = dmg;
     this.owner = owner;
-    this.isBeam = isBeam;
-    this.life = 90;
+    this.beam = beam;
+    this.life = 70;
+    this.dead = false;
   }
 
   update() {
     this.x += this.vx;
     this.y += this.vy;
     this.life--;
-    // 拖尾粒子
-    if (frameCount % 2 === 0) {
-      particles.push(new Particle(this.x, this.y, this.col, 0.4));
-    }
+    if (this.life <= 0 || this.x < -10 || this.x > GW + 10) this.dead = true;
+    if (frameCount % 2 === 0) particles.push(new Particle(this.x, this.y, this.col, 0.5));
   }
 
-  hits(fighter) {
-    return dist(this.x, this.y, fighter.x, fighter.y - 35) < this.r + 25;
+  hits(f) {
+    if (f.invuln > 0 || f.dodgeTimer > 0 || f.dead) return false;
+    return abs(this.x - f.x) < this.r + 8 && abs(this.y - (f.y - 12)) < this.r + 10;
   }
 
-  offscreen() {
-    return this.x < -50 || this.x > W + 50 || this.life <= 0;
-  }
-
-  display() {
+  draw() {
     noStroke();
-    if (this.isBeam) {
-      // 死亡光線：細長
-      fill(red(this.col), green(this.col), blue(this.col), 80);
-      ellipse(this.x, this.y, this.r * 4, this.r);
+    if (this.beam) {
+      fill(red(this.col), green(this.col), blue(this.col), 100);
+      rect(floor(this.x - 8), floor(this.y - 2), 16, 4);
       fill(this.col);
-      ellipse(this.x, this.y, this.r * 2.5, this.r * 0.6);
+      rect(floor(this.x - 5), floor(this.y - 1), 10, 2);
       fill(255, 255, 200);
-      ellipse(this.x, this.y, this.r, this.r * 0.3);
+      rect(floor(this.x - 2), floor(this.y), 4, 1);
     } else {
-      // 氣功波：圓形能量球
-      fill(red(this.col), green(this.col), blue(this.col), 60);
-      ellipse(this.x, this.y, this.r * 2.8);
+      fill(red(this.col), green(this.col), blue(this.col), 80);
+      rect(floor(this.x - this.r - 2), floor(this.y - this.r - 2), (this.r + 2) * 2, (this.r + 2) * 2);
       fill(this.col);
-      ellipse(this.x, this.y, this.r * 1.8);
+      rect(floor(this.x - this.r), floor(this.y - this.r), this.r * 2, this.r * 2);
       fill(255, 255, 220);
-      ellipse(this.x - 2, this.y - 2, this.r * 0.7);
+      rect(floor(this.x - 2), floor(this.y - 2), 3, 3);
     }
   }
 }
 
-/* ========== Particle ========== */
+/* ========== FX ========== */
 
 class Particle {
-  constructor(x, y, col, scale = 1) {
+  constructor(x, y, col, sc = 1) {
     this.x = x;
     this.y = y;
-    this.vx = random(-3, 3) * scale;
-    this.vy = random(-4, 1) * scale;
-    this.life = floor(random(15, 30) * scale + 10);
-    this.maxLife = this.life;
+    this.vx = random(-1.5, 1.5) * sc;
+    this.vy = random(-2, 0.5) * sc;
+    this.life = floor(random(10, 22));
+    this.max = this.life;
     this.col = col;
-    this.size = random(3, 8) * (scale + 0.5);
+    this.sz = floor(random(1, 3));
   }
-
   update() {
     this.x += this.vx;
     this.y += this.vy;
-    this.vy += 0.15;
+    this.vy += 0.08;
     this.life--;
   }
-
-  display() {
-    let a = map(this.life, 0, this.maxLife, 0, 220);
+  draw() {
+    const a = map(this.life, 0, this.max, 0, 255);
     noStroke();
     fill(red(this.col), green(this.col), blue(this.col), a);
-    ellipse(this.x, this.y, this.size);
+    rect(floor(this.x), floor(this.y), this.sz, this.sz);
+  }
+}
+
+class HitSpark {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.life = 8;
+  }
+  update() {
+    this.life--;
+  }
+  draw() {
+    noStroke();
+    fill(255, 255, 200);
+    const s = this.life;
+    rect(floor(this.x - s), floor(this.y), s * 2, 1);
+    rect(floor(this.x), floor(this.y - s), 1, s * 2);
+    fill(255, 180, 60);
+    rect(floor(this.x - 2), floor(this.y - 2), 4, 4);
   }
 }
